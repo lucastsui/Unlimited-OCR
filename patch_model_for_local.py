@@ -4,9 +4,12 @@ The released ``modeling_unlimitedocr.py`` hardcodes CUDA (``.cuda()`` calls and
 ``torch.autocast("cuda", ...)``), so the model cannot run on Apple Silicon (MPS)
 or CPU at all. Replacing ``.cuda()`` with ``.to(device)`` is NOT sufficient: on
 the MPS backend ``torch.Tensor.masked_scatter_`` silently mis-scatters when its
-source tensor is non-contiguous, which scrambles the injected image embeddings
-and makes the model emit an immediate end-of-sequence token (empty output, no
-error). This script therefore applies two kinds of edits:
+mask is a stride-0 broadcast view (which the ``.unsqueeze(-1)`` at the injection
+call produces) or when its source tensor is non-contiguous. Either trigger
+scrambles the injected image embeddings and makes the model emit an immediate
+end-of-sequence token (empty output, no error); the broadcast mask is the one
+live at this call site, since the source comes from ``torch.cat`` and is
+contiguous. This script therefore applies two kinds of edits:
 
   1. Replace the image-embedding injection with explicit positional assignment,
      which is mathematically identical and correct on CUDA, MPS, and CPU.
@@ -31,9 +34,10 @@ INJECTION_BEFORE = (
 )
 INJECTION_AFTER = """\
                     # masked_scatter_ silently mis-scatters on the MPS backend
-                    # when the source tensor is non-contiguous; explicit
-                    # positional assignment computes the same result and is
-                    # correct on CUDA, MPS, and CPU alike.
+                    # when its mask is a stride-0 broadcast view (as the
+                    # .unsqueeze(-1) here produced) or its source tensor is
+                    # non-contiguous; explicit positional assignment computes
+                    # the same result and is correct on CUDA, MPS, and CPU.
                     _feat = images_in_this_batch.to(
                         device=inputs_embeds.device, dtype=inputs_embeds.dtype
                     )
